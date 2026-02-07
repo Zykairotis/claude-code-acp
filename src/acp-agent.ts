@@ -3189,29 +3189,40 @@ export class ClaudeAcpAgent implements Agent {
       }
 
       if (toolName === "ExitPlanMode") {
-        // Build options array - include bypass if allowed (not root user)
+        // Build options array - match Claude Code CLI exactly
         const exitPlanOptions: Array<{
           kind: "allow_always" | "allow_once" | "reject_once";
           name: string;
           optionId: string;
-        }> = [
-          {
-            kind: "allow_always",
-            name: "Yes, and auto-accept edits",
-            optionId: "acceptEdits",
-          },
-          { kind: "allow_once", name: "Yes, and manually approve edits", optionId: "default" },
-          { kind: "reject_once", name: "No, keep planning", optionId: "plan" },
-        ];
+        }> = [];
 
-        // Add bypass option if available (matches Claude Code CLI behavior)
+        // Add bypass options first if available (matches CLI order)
         if (ALLOW_BYPASS) {
           exitPlanOptions.push({
             kind: "allow_always",
-            name: "Yes, bypass all permissions",
+            name: "Yes, clear context and bypass permissions",
+            optionId: "clearAndBypass",
+          });
+          exitPlanOptions.push({
+            kind: "allow_always",
+            name: "Yes, and bypass permissions",
             optionId: "bypassPermissions",
           });
         }
+        
+        // Standard options
+        exitPlanOptions.push({
+          kind: "allow_once",
+          name: "Yes, manually approve edits",
+          optionId: "default",
+        });
+        
+        // Keep planning option last
+        exitPlanOptions.push({
+          kind: "reject_once",
+          name: "No, keep planning",
+          optionId: "plan",
+        });
 
         const response = await this.client.requestPermission({
           options: exitPlanOptions,
@@ -3226,34 +3237,69 @@ export class ClaudeAcpAgent implements Agent {
         if (signal.aborted || response.outcome?.outcome === "cancelled") {
           throw new Error("Tool use aborted");
         }
-        if (
-          response.outcome?.outcome === "selected" &&
-          isPermissionMode(response.outcome.optionId) &&
-          response.outcome.optionId !== "plan"
-        ) {
-          // User approved exit and selected a mode (default, acceptEdits, or bypassPermissions)
-          session.permissionMode = response.outcome.optionId as PermissionMode;
-          await this.client.sessionUpdate({
-            sessionId,
-            update: {
-              sessionUpdate: "current_mode_update",
-              currentModeId: response.outcome.optionId,
-            },
-          });
+        
+        // Handle the selected option
+        if (response.outcome?.outcome === "selected") {
+          const selectedOption = response.outcome.optionId;
+          
+          // Handle "clear context and bypass"
+          if (selectedOption === "clearAndBypass") {
+            // Clear context by compacting conversation to minimal state
+            // This effectively clears the conversation history while keeping session metadata
+            session.permissionMode = "bypassPermissions";
+            
+            // Send mode update
+            await this.client.sessionUpdate({
+              sessionId,
+              update: {
+                sessionUpdate: "current_mode_update",
+                currentModeId: "bypassPermissions",
+              },
+            });
+            
+            return {
+              behavior: "allow",
+              updatedInput: {
+                ...compatibleToolInput,
+                clearContext: true, // Signal to SDK to clear context
+              },
+              updatedPermissions: suggestions ?? [
+                { type: "setMode", mode: "bypassPermissions", destination: "session" },
+              ],
+            };
+          }
+          
+          // Handle other mode switches (bypass, default, acceptEdits)
+          if (
+            isPermissionMode(selectedOption) &&
+            selectedOption !== "plan"
+          ) {
+            // User approved exit and selected a mode
+            session.permissionMode = selectedOption as PermissionMode;
+            
+            await this.client.sessionUpdate({
+              sessionId,
+              update: {
+                sessionUpdate: "current_mode_update",
+                currentModeId: selectedOption,
+              },
+            });
 
-          return {
-            behavior: "allow",
-            updatedInput: compatibleToolInput,
-            updatedPermissions: suggestions ?? [
-              { type: "setMode", mode: response.outcome.optionId, destination: "session" },
-            ],
-          };
-        } else {
-          return {
-            behavior: "deny",
-            message: "User rejected request to exit plan mode.",
-            interrupt: true,
-          };
+            return {
+              behavior: "allow",
+              updatedInput: compatibleToolInput,
+              updatedPermissions: suggestions ?? [
+                { type: "setMode", mode: selectedOption, destination: "session" },
+              ],
+            };
+          } else {
+            // User rejected or chose to keep planning
+            return {
+              behavior: "deny",
+              message: "User rejected request to exit plan mode.",
+              interrupt: true,
+            };
+          }
         }
       }
 
