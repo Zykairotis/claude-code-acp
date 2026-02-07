@@ -216,6 +216,9 @@ type SessionConfigState = {
   enablePartialMessagesValueId: ToggleValueId;
   betasValueId: CustomStateValueId;
   systemPromptValueId: CustomStateValueId;
+  outputFormatValueId: CustomStateValueId;
+  agentsValueId: CustomStateValueId;
+  settingSourcesValueId: CustomStateValueId;
 };
 
 type SessionHistoryEntry = {
@@ -280,6 +283,9 @@ export type NewSessionMeta = {
       enablePartialMessages?: boolean;
       betas?: string[];
       systemPrompt?: Options["systemPrompt"];
+      outputFormat?: Options["outputFormat"];
+      agents?: Options["agents"];
+      settingSources?: Options["settingSources"];
     };
 
     /**
@@ -357,6 +363,9 @@ const SESSION_CONFIG_IDS = {
   enablePartialMessages: "enable_partial_messages",
   betas: "betas",
   systemPrompt: "system_prompt",
+  outputFormat: "output_format",
+  agents: "agents",
+  settingSources: "setting_sources",
 } as const;
 
 const EXTENSION_METHODS = {
@@ -1169,6 +1178,33 @@ export class ClaudeAcpAgent implements Agent {
         category: "_claude_system_prompt",
         description: "Custom system prompt configuration. Creation-time only.",
         currentValue: session.sessionConfig.systemPromptValueId,
+        options: CUSTOM_STATE_OPTIONS,
+      },
+      {
+        id: SESSION_CONFIG_IDS.outputFormat,
+        type: "select",
+        name: "Structured Output",
+        category: "_claude_output_format",
+        description: "JSON Schema output format configuration. Creation-time only.",
+        currentValue: session.sessionConfig.outputFormatValueId,
+        options: CUSTOM_STATE_OPTIONS,
+      },
+      {
+        id: SESSION_CONFIG_IDS.agents,
+        type: "select",
+        name: "Subagent Definitions",
+        category: "_claude_agents",
+        description: "Programmatic subagent definitions. Creation-time only.",
+        currentValue: session.sessionConfig.agentsValueId,
+        options: CUSTOM_STATE_OPTIONS,
+      },
+      {
+        id: SESSION_CONFIG_IDS.settingSources,
+        type: "select",
+        name: "Setting Sources",
+        category: "_claude_setting_sources",
+        description: "Filesystem setting sources (enables Skills). Creation-time only.",
+        currentValue: session.sessionConfig.settingSourcesValueId,
         options: CUSTOM_STATE_OPTIONS,
       },
     ];
@@ -3317,7 +3353,9 @@ export class ClaudeAcpAgent implements Agent {
     const userProvidedOptions = (params._meta as NewSessionMeta | undefined)?.claudeCode?.options;
     const startupSessionConfig = (params._meta as NewSessionMeta | undefined)?.claudeCode
       ?.sessionConfig;
-    const requestedSettingSources = userProvidedOptions?.settingSources;
+    const requestedSettingSources = 
+      startupSessionConfig?.settingSources ?? 
+      userProvidedOptions?.settingSources;
     const effectiveSettingSources =
       Array.isArray(requestedSettingSources) && requestedSettingSources.length > 0
         ? requestedSettingSources
@@ -3493,6 +3531,9 @@ export class ClaudeAcpAgent implements Agent {
       cwd: params.cwd,
       includePartialMessages: startupSessionConfig?.enablePartialMessages !== false,
       betas: startupSessionConfig?.betas as Options["betas"],
+      outputFormat: startupSessionConfig?.outputFormat,
+      agents: startupSessionConfig?.agents,
+      // settingSources already set above from effectiveSettingSources
       mcpServers: { ...(startupMcpServers || {}), ...mcpServers },
       // If we want bypassPermissions to be an option, we have to allow it here.
       // But it doesn't work in root mode, so we only activate it if it will work.
@@ -3678,6 +3719,9 @@ export class ClaudeAcpAgent implements Agent {
           startupSessionConfig?.enablePartialMessages === false ? "disabled" : "enabled",
         betasValueId: startupSessionConfig?.betas ? "custom" : "default",
         systemPromptValueId: startupSessionConfig?.systemPrompt ? "custom" : "default",
+        outputFormatValueId: startupSessionConfig?.outputFormat ? "custom" : "default",
+        agentsValueId: startupSessionConfig?.agents ? "custom" : "default",
+        settingSourcesValueId: startupSessionConfig?.settingSources ? "custom" : "default",
       },
       settingsManager,
       userMessageCheckpoints: checkpointHistory,
