@@ -219,6 +219,9 @@ type SessionConfigState = {
   outputFormatValueId: CustomStateValueId;
   agentsValueId: CustomStateValueId;
   settingSourcesValueId: CustomStateValueId;
+  fallbackModelValueId: CustomStateValueId;
+  userValueId: CustomStateValueId;
+  cliPathValueId: CustomStateValueId;
 };
 
 type SessionHistoryEntry = {
@@ -286,6 +289,9 @@ export type NewSessionMeta = {
       outputFormat?: Options["outputFormat"];
       agents?: Options["agents"];
       settingSources?: Options["settingSources"];
+      fallbackModel?: string;
+      user?: string;
+      cliPath?: string;
     };
 
     /**
@@ -366,6 +372,9 @@ const SESSION_CONFIG_IDS = {
   outputFormat: "output_format",
   agents: "agents",
   settingSources: "setting_sources",
+  fallbackModel: "fallback_model",
+  user: "user",
+  cliPath: "cli_path",
 } as const;
 
 const EXTENSION_METHODS = {
@@ -1205,6 +1214,33 @@ export class ClaudeAcpAgent implements Agent {
         category: "_claude_setting_sources",
         description: "Filesystem setting sources (enables Skills). Creation-time only.",
         currentValue: session.sessionConfig.settingSourcesValueId,
+        options: CUSTOM_STATE_OPTIONS,
+      },
+      {
+        id: SESSION_CONFIG_IDS.fallbackModel,
+        type: "select",
+        name: "Fallback Model",
+        category: "_claude_fallback_model",
+        description: "Automatic failover model when primary fails. Creation-time only.",
+        currentValue: session.sessionConfig.fallbackModelValueId,
+        options: CUSTOM_STATE_OPTIONS,
+      },
+      {
+        id: SESSION_CONFIG_IDS.user,
+        type: "select",
+        name: "User Identifier",
+        category: "_claude_user",
+        description: "User identifier for analytics and tracking. Creation-time only.",
+        currentValue: session.sessionConfig.userValueId,
+        options: CUSTOM_STATE_OPTIONS,
+      },
+      {
+        id: SESSION_CONFIG_IDS.cliPath,
+        type: "select",
+        name: "CLI Path",
+        category: "_claude_cli_path",
+        description: "Custom path to Claude Code CLI executable. Creation-time only.",
+        currentValue: session.sessionConfig.cliPathValueId,
         options: CUSTOM_STATE_OPTIONS,
       },
     ];
@@ -3533,6 +3569,10 @@ export class ClaudeAcpAgent implements Agent {
       betas: startupSessionConfig?.betas as Options["betas"],
       outputFormat: startupSessionConfig?.outputFormat,
       agents: startupSessionConfig?.agents,
+      fallbackModel: startupSessionConfig?.fallbackModel,
+      // TypeScript SDK types may not include these yet, but they exist in runtime
+      ...(startupSessionConfig?.user ? { user: startupSessionConfig.user } : {}),
+      ...(startupSessionConfig?.cliPath ? { cliPath: startupSessionConfig.cliPath } : {}),
       // settingSources already set above from effectiveSettingSources
       mcpServers: { ...(startupMcpServers || {}), ...mcpServers },
       // If we want bypassPermissions to be an option, we have to allow it here.
@@ -3722,6 +3762,9 @@ export class ClaudeAcpAgent implements Agent {
         outputFormatValueId: startupSessionConfig?.outputFormat ? "custom" : "default",
         agentsValueId: startupSessionConfig?.agents ? "custom" : "default",
         settingSourcesValueId: startupSessionConfig?.settingSources ? "custom" : "default",
+        fallbackModelValueId: startupSessionConfig?.fallbackModel ? "custom" : "default",
+        userValueId: startupSessionConfig?.user ? "custom" : "default",
+        cliPathValueId: startupSessionConfig?.cliPath ? "custom" : "default",
       },
       settingsManager,
       userMessageCheckpoints: checkpointHistory,
