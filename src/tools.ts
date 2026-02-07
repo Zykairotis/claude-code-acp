@@ -513,8 +513,9 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       return {
         title: "Ready to code?",
         kind: "switch_mode",
+        // Don't include plan if clearing context (fresh start)
         content:
-          input && input.plan
+          input && input.plan && !input.clearContext
             ? [{ type: "content", content: { type: "text", text: input.plan } }]
             : [],
       };
