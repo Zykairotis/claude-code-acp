@@ -213,6 +213,9 @@ type SessionConfigState = {
   mcpServersValueId: CustomStateValueId;
   sandboxValueId: ToggleValueId;
   accountInfo: unknown | null;
+  enablePartialMessagesValueId: ToggleValueId;
+  betasValueId: CustomStateValueId;
+  systemPromptValueId: CustomStateValueId;
 };
 
 type SessionHistoryEntry = {
@@ -274,6 +277,9 @@ export type NewSessionMeta = {
       maxBudgetUsd?: number;
       mcpServers?: Record<string, McpServerConfig>;
       sandbox?: Options["sandbox"];
+      enablePartialMessages?: boolean;
+      betas?: string[];
+      systemPrompt?: Options["systemPrompt"];
     };
 
     /**
@@ -348,6 +354,9 @@ const SESSION_CONFIG_IDS = {
   maxBudgetUsd: "max_budget_usd",
   mcpServers: "mcp_servers",
   sandbox: "sandbox",
+  enablePartialMessages: "enable_partial_messages",
+  betas: "betas",
+  systemPrompt: "system_prompt",
 } as const;
 
 const EXTENSION_METHODS = {
@@ -1134,6 +1143,33 @@ export class ClaudeAcpAgent implements Agent {
         description: "Sandbox command execution behavior. Creation-time only.",
         currentValue: session.sessionConfig.sandboxValueId,
         options: TOGGLE_OPTIONS,
+      },
+      {
+        id: SESSION_CONFIG_IDS.enablePartialMessages,
+        type: "select",
+        name: "Streaming Partial Messages",
+        category: "_claude_enable_partial_messages",
+        description: "Enable real-time streaming of partial messages. Runtime mutable.",
+        currentValue: session.sessionConfig.enablePartialMessagesValueId,
+        options: TOGGLE_OPTIONS,
+      },
+      {
+        id: SESSION_CONFIG_IDS.betas,
+        type: "select",
+        name: "Beta Features",
+        category: "_claude_betas",
+        description: "Enable experimental SDK beta features. Creation-time only.",
+        currentValue: session.sessionConfig.betasValueId,
+        options: CUSTOM_STATE_OPTIONS,
+      },
+      {
+        id: SESSION_CONFIG_IDS.systemPrompt,
+        type: "select",
+        name: "System Prompt",
+        category: "_claude_system_prompt",
+        description: "Custom system prompt configuration. Creation-time only.",
+        currentValue: session.sessionConfig.systemPromptValueId,
+        options: CUSTOM_STATE_OPTIONS,
       },
     ];
   }
@@ -3258,7 +3294,13 @@ export class ClaudeAcpAgent implements Agent {
     }
 
     let systemPrompt: Options["systemPrompt"] = { type: "preset", preset: "claude_code" };
-    if (params._meta?.systemPrompt) {
+    
+    // Priority: sessionConfig > _meta.systemPrompt > default
+    const sessionConfigMeta = (params._meta as NewSessionMeta | undefined)?.claudeCode?.sessionConfig;
+    if (sessionConfigMeta?.systemPrompt) {
+      systemPrompt = sessionConfigMeta.systemPrompt;
+    } else if (params._meta?.systemPrompt) {
+      // Legacy support for old _meta.systemPrompt format
       const customPrompt = params._meta.systemPrompt;
       if (typeof customPrompt === "string") {
         systemPrompt = customPrompt;
@@ -3449,7 +3491,8 @@ export class ClaudeAcpAgent implements Agent {
       env: startupEnv,
       // Override certain fields that must be controlled by ACP
       cwd: params.cwd,
-      includePartialMessages: true,
+      includePartialMessages: startupSessionConfig?.enablePartialMessages !== false,
+      betas: startupSessionConfig?.betas as Options["betas"],
       mcpServers: { ...(startupMcpServers || {}), ...mcpServers },
       // If we want bypassPermissions to be an option, we have to allow it here.
       // But it doesn't work in root mode, so we only activate it if it will work.
@@ -3631,6 +3674,10 @@ export class ClaudeAcpAgent implements Agent {
         mcpServersValueId: startupMcpServers ? "custom" : "default",
         sandboxValueId: startupSandbox?.enabled ? "enabled" : "disabled",
         accountInfo: null,
+        enablePartialMessagesValueId:
+          startupSessionConfig?.enablePartialMessages === false ? "disabled" : "enabled",
+        betasValueId: startupSessionConfig?.betas ? "custom" : "default",
+        systemPromptValueId: startupSessionConfig?.systemPrompt ? "custom" : "default",
       },
       settingsManager,
       userMessageCheckpoints: checkpointHistory,
