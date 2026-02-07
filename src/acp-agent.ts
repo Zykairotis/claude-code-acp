@@ -3189,16 +3189,32 @@ export class ClaudeAcpAgent implements Agent {
       }
 
       if (toolName === "ExitPlanMode") {
+        // Build options array - include bypass if allowed (not root user)
+        const exitPlanOptions: Array<{
+          kind: "allow_always" | "allow_once" | "reject_once";
+          name: string;
+          optionId: string;
+        }> = [
+          {
+            kind: "allow_always",
+            name: "Yes, and auto-accept edits",
+            optionId: "acceptEdits",
+          },
+          { kind: "allow_once", name: "Yes, and manually approve edits", optionId: "default" },
+          { kind: "reject_once", name: "No, keep planning", optionId: "plan" },
+        ];
+
+        // Add bypass option if available (matches Claude Code CLI behavior)
+        if (ALLOW_BYPASS) {
+          exitPlanOptions.push({
+            kind: "allow_always",
+            name: "Yes, bypass all permissions",
+            optionId: "bypassPermissions",
+          });
+        }
+
         const response = await this.client.requestPermission({
-          options: [
-            {
-              kind: "allow_always",
-              name: "Yes, and auto-accept edits",
-              optionId: "acceptEdits",
-            },
-            { kind: "allow_once", name: "Yes, and manually approve edits", optionId: "default" },
-            { kind: "reject_once", name: "No, keep planning", optionId: "plan" },
-          ],
+          options: exitPlanOptions,
           sessionId,
           toolCall: {
             toolCallId: toolUseID,
@@ -3212,9 +3228,11 @@ export class ClaudeAcpAgent implements Agent {
         }
         if (
           response.outcome?.outcome === "selected" &&
-          (response.outcome.optionId === "default" || response.outcome.optionId === "acceptEdits")
+          isPermissionMode(response.outcome.optionId) &&
+          response.outcome.optionId !== "plan"
         ) {
-          session.permissionMode = response.outcome.optionId;
+          // User approved exit and selected a mode (default, acceptEdits, or bypassPermissions)
+          session.permissionMode = response.outcome.optionId as PermissionMode;
           await this.client.sessionUpdate({
             sessionId,
             update: {
