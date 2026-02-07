@@ -513,9 +513,9 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       return {
         title: "Ready to code?",
         kind: "switch_mode",
-        // Don't include plan if clearing context (fresh start)
+        // Always include plan - it becomes the first prompt for the clean agent
         content:
-          input && input.plan && !input.clearContext
+          input && input.plan
             ? [{ type: "content", content: { type: "text", text: input.plan } }]
             : [],
       };
