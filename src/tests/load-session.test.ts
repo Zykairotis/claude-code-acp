@@ -67,7 +67,19 @@ describe("loadSession", () => {
     ClaudeAcpAgent = acpAgent.ClaudeAcpAgent;
 
     agent = new ClaudeAcpAgent(createMockClient());
-    createSessionSpy = vi.fn(async () => ({ modes: null, models: null }));
+    createSessionSpy = vi.fn(async () => ({
+      modes: null,
+      models: null,
+      configOptions: [
+        {
+          id: "mode",
+          type: "select",
+          name: "Mode",
+          currentValue: "default",
+          options: [{ value: "default", name: "default" }],
+        },
+      ],
+    }));
     (agent as unknown as { createSession: typeof createSessionSpy }).createSession =
       createSessionSpy;
   });
@@ -147,7 +159,19 @@ describe("loadSession", () => {
 
     const result = await agent.loadSession({ cwd, sessionId, mcpServers: [] });
 
-    expect(result).toEqual({ modes: null, models: null });
+    expect(result).toEqual({
+      modes: null,
+      models: null,
+      configOptions: [
+        {
+          id: "mode",
+          type: "select",
+          name: "Mode",
+          currentValue: "default",
+          options: [{ value: "default", name: "default" }],
+        },
+      ],
+    });
     expect(createSessionSpy).toHaveBeenCalledWith(
       expect.objectContaining({ cwd, mcpServers: [] }),
       { resume: sessionId },

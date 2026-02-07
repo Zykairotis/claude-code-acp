@@ -69,7 +69,12 @@ function containsShellOperator(str: string): boolean {
  * "Edit rules apply to all built-in tools that edit files."
  * This means an Edit(...) rule should match Write, MultiEdit, etc.
  */
-const FILE_EDITING_TOOLS = [acpToolNames.edit, acpToolNames.write];
+const FILE_EDITING_TOOLS = [
+  acpToolNames.edit,
+  acpToolNames.write,
+  acpToolNames.rewindFiles,
+  acpToolNames.notebookEdit,
+];
 
 /**
  * Tools that read files. Per Claude Code docs:
@@ -77,16 +82,39 @@ const FILE_EDITING_TOOLS = [acpToolNames.edit, acpToolNames.write];
  * that read files like Grep and Glob."
  * This means a Read(...) rule should match Grep, Glob, etc.
  */
-const FILE_READING_TOOLS = [acpToolNames.read];
+const FILE_READING_TOOLS = [
+  acpToolNames.read,
+  acpToolNames.ls,
+  acpToolNames.glob,
+  acpToolNames.grep,
+  acpToolNames.notebookRead,
+  acpToolNames.readMcpResource,
+];
 
 /**
  * Functions to extract the relevant argument from tool input for permission matching
  */
 const TOOL_ARG_ACCESSORS: Record<string, (input: unknown) => string | undefined> = {
-  mcp__acp__Read: (input) => (input as { file_path?: string })?.file_path,
-  mcp__acp__Edit: (input) => (input as { file_path?: string })?.file_path,
-  mcp__acp__Write: (input) => (input as { file_path?: string })?.file_path,
+  mcp__acp__Read: (input) => {
+    const args = input as { file_path?: string; path?: string };
+    return args.file_path ?? args.path;
+  },
+  mcp__acp__Edit: (input) => {
+    const args = input as { file_path?: string; path?: string };
+    return args.file_path ?? args.path;
+  },
+  mcp__acp__Write: (input) => {
+    const args = input as { file_path?: string; path?: string };
+    return args.file_path ?? args.path;
+  },
+  mcp__acp__RewindFiles: (input) => (input as { user_message_id?: string })?.user_message_id,
   mcp__acp__Bash: (input) => (input as { command?: string })?.command,
+  mcp__acp__LS: (input) => (input as { path?: string })?.path,
+  mcp__acp__Glob: (input) => (input as { path?: string })?.path,
+  mcp__acp__Grep: (input) => (input as { path?: string })?.path,
+  mcp__acp__NotebookRead: (input) => (input as { notebook_path?: string })?.notebook_path,
+  mcp__acp__NotebookEdit: (input) => (input as { notebook_path?: string })?.notebook_path,
+  mcp__acp__ReadMcpResource: (input) => (input as { uri?: string })?.uri,
 };
 
 /**
@@ -289,7 +317,8 @@ export class SettingsManager {
    * Returns the path to the user settings file
    */
   private getUserSettingsPath(): string {
-    return path.join(CLAUDE_CONFIG_DIR, "settings.json");
+    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR ?? CLAUDE_CONFIG_DIR;
+    return path.join(claudeConfigDir, "settings.json");
   }
 
   /**

@@ -6,14 +6,24 @@ import * as os from "node:os";
 
 describe("SettingsManager", () => {
   let tempDir: string;
+  let tempClaudeConfigDir: string;
   let settingsManager: SettingsManager;
+  const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 
   beforeEach(async () => {
     tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "settings-test-"));
+    tempClaudeConfigDir = path.join(tempDir, ".claude-home");
+    await fs.promises.mkdir(tempClaudeConfigDir, { recursive: true });
+    process.env.CLAUDE_CONFIG_DIR = tempClaudeConfigDir;
   });
 
   afterEach(async () => {
     settingsManager?.dispose();
+    if (originalClaudeConfigDir === undefined) {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    } else {
+      process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+    }
     await fs.promises.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -65,6 +75,28 @@ describe("SettingsManager", () => {
 
       const result = settingsManager.checkPermission("mcp__acp__Read", {
         file_path: "/some/file.txt",
+      });
+      expect(result.decision).toBe("allow");
+      expect(result.rule).toBe("Read");
+    });
+
+    it("should match Read rules when tool input uses path alias", async () => {
+      const claudeDir = path.join(tempDir, ".claude");
+      await fs.promises.mkdir(claudeDir, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(claudeDir, "settings.json"),
+        JSON.stringify({
+          permissions: {
+            allow: ["Read"],
+          },
+        }),
+      );
+
+      settingsManager = new SettingsManager(tempDir);
+      await settingsManager.initialize();
+
+      const result = settingsManager.checkPermission("mcp__acp__Read", {
+        path: "/some/file.txt",
       });
       expect(result.decision).toBe("allow");
       expect(result.rule).toBe("Read");
@@ -140,6 +172,40 @@ describe("SettingsManager", () => {
         file_path: "/some/file.txt",
       });
       expect(result.decision).toBe("allow");
+    });
+
+    it("applies Read rules to ACP search wrappers (LS/Glob/Grep)", async () => {
+      const claudeDir = path.join(tempDir, ".claude");
+      await fs.promises.mkdir(claudeDir, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(claudeDir, "settings.json"),
+        JSON.stringify({
+          permissions: {
+            allow: ["Read(./src)"],
+            deny: ["Read(./.env*)"],
+          },
+        }),
+      );
+
+      settingsManager = new SettingsManager(tempDir);
+      await settingsManager.initialize();
+
+      const lsAllowed = settingsManager.checkPermission("mcp__acp__LS", {
+        path: path.join(tempDir, "src"),
+      });
+      expect(lsAllowed.decision).toBe("allow");
+
+      const globAllowed = settingsManager.checkPermission("mcp__acp__Glob", {
+        path: path.join(tempDir, "src"),
+        pattern: "**/*.ts",
+      });
+      expect(globAllowed.decision).toBe("allow");
+
+      const grepDenied = settingsManager.checkPermission("mcp__acp__Grep", {
+        path: path.join(tempDir, ".env"),
+        pattern: "TOKEN",
+      });
+      expect(grepDenied.decision).toBe("deny");
     });
   });
 

@@ -47,6 +47,24 @@ const acpUnqualifiedToolNames = {
   bash: "Bash",
   killShell: "KillShell",
   bashOutput: "BashOutput",
+  rewindFiles: "RewindFiles",
+  ls: "LS",
+  glob: "Glob",
+  grep: "Grep",
+  task: "Task",
+  agent: "Agent",
+  taskStop: "TaskStop",
+  taskOutput: "TaskOutput",
+  listMcpResources: "ListMcpResources",
+  readMcpResource: "ReadMcpResource",
+  notebookRead: "NotebookRead",
+  notebookEdit: "NotebookEdit",
+  webSearch: "WebSearch",
+  webFetch: "WebFetch",
+  todoWrite: "TodoWrite",
+  config: "Config",
+  slashCommand: "SlashCommand",
+  skill: "Skill",
 };
 
 export const ACP_TOOL_NAME_PREFIX = "mcp__acp__";
@@ -57,9 +75,32 @@ export const acpToolNames = {
   bash: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.bash,
   killShell: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.killShell,
   bashOutput: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.bashOutput,
+  rewindFiles: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.rewindFiles,
+  ls: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.ls,
+  glob: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.glob,
+  grep: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.grep,
+  task: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.task,
+  agent: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.agent,
+  taskStop: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.taskStop,
+  taskOutput: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.taskOutput,
+  listMcpResources: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.listMcpResources,
+  readMcpResource: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.readMcpResource,
+  notebookRead: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.notebookRead,
+  notebookEdit: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.notebookEdit,
+  webSearch: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.webSearch,
+  webFetch: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.webFetch,
+  todoWrite: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.todoWrite,
+  config: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.config,
+  slashCommand: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.slashCommand,
+  skill: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.skill,
 };
 
-export const EDIT_TOOL_NAMES = [acpToolNames.edit, acpToolNames.write];
+export const EDIT_TOOL_NAMES = [
+  acpToolNames.edit,
+  acpToolNames.write,
+  acpToolNames.rewindFiles,
+  acpToolNames.notebookEdit,
+];
 
 /**
  * Union of all possible content types that can appear in tool results from the Anthropic SDK.
@@ -107,8 +148,11 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
 
   switch (name) {
     case "Task":
+    case "Agent":
+    case acpToolNames.task:
+    case acpToolNames.agent:
       return {
-        title: input?.description ? input.description : "Task",
+        title: input?.description ? input.description : name,
         kind: "think",
         content:
           input && input.prompt
@@ -122,6 +166,7 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
 
     case "NotebookRead":
+    case acpToolNames.notebookRead:
       return {
         title: input?.notebook_path ? `Read Notebook ${input.notebook_path}` : "Read Notebook",
         kind: "read",
@@ -130,6 +175,7 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
 
     case "NotebookEdit":
+    case acpToolNames.notebookEdit:
       return {
         title: input?.notebook_path ? `Edit Notebook ${input.notebook_path}` : "Edit Notebook",
         kind: "edit",
@@ -162,6 +208,8 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
 
     case "BashOutput":
+    case "TaskOutput":
+    case acpToolNames.taskOutput:
     case acpToolNames.bashOutput:
       return {
         title: "Tail Logs",
@@ -170,6 +218,9 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
 
     case "KillShell":
+    case "TaskStop":
+    case "KillBash":
+    case acpToolNames.taskStop:
     case acpToolNames.killShell:
       return {
         title: "Kill Process",
@@ -178,6 +229,7 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
 
     case acpToolNames.read: {
+      const filePath = input.file_path ?? input.path;
       let limit = "";
       if (input.limit) {
         limit =
@@ -186,12 +238,12 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
         limit = " (from line " + (input.offset + 1) + ")";
       }
       return {
-        title: "Read " + (input.file_path ?? "File") + limit,
+        title: "Read " + (filePath ?? "File") + limit,
         kind: "read",
-        locations: input.file_path
+        locations: filePath
           ? [
               {
-                path: input.file_path,
+                path: filePath,
                 line: input.offset ?? 0,
               },
             ]
@@ -205,17 +257,19 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
         title: "Read File",
         kind: "read",
         content: [],
-        locations: input.file_path
-          ? [
-              {
-                path: input.file_path,
-                line: input.offset ?? 0,
-              },
-            ]
-          : [],
+        locations:
+          (input.file_path ?? input.path)
+            ? [
+                {
+                  path: input.file_path ?? input.path,
+                  line: input.offset ?? 0,
+                },
+              ]
+            : [],
       };
 
     case "LS":
+    case acpToolNames.ls:
       return {
         title: `List the ${input?.path ? "`" + input.path + "`" : "current"} directory's contents`,
         kind: "search",
@@ -223,9 +277,28 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
         locations: [],
       };
 
+    case "ListMcpResources":
+    case acpToolNames.listMcpResources:
+      return {
+        title: input?.server ? `List MCP resources from ${input.server}` : "List MCP resources",
+        kind: "search",
+        content: [],
+      };
+
+    case "ReadMcpResource":
+    case acpToolNames.readMcpResource:
+      return {
+        title:
+          input?.server && input?.uri
+            ? `Read MCP resource ${input.uri} from ${input.server}`
+            : "Read MCP resource",
+        kind: "read",
+        content: [],
+      };
+
     case acpToolNames.edit:
     case "Edit": {
-      const path = input?.file_path ?? input?.file_path;
+      const path = input?.file_path ?? input?.path;
 
       return {
         title: path ? `Edit \`${path}\`` : "Edit",
@@ -246,12 +319,13 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
     }
 
     case acpToolNames.write: {
+      const filePath = input?.file_path ?? input?.path;
       let content: ToolCallContent[] = [];
-      if (input && input.file_path) {
+      if (input && filePath) {
         content = [
           {
             type: "diff",
-            path: input.file_path,
+            path: filePath,
             oldText: null,
             newText: input.content,
           },
@@ -265,32 +339,48 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
         ];
       }
       return {
-        title: input?.file_path ? `Write ${input.file_path}` : "Write",
+        title: filePath ? `Write ${filePath}` : "Write",
         kind: "edit",
         content,
-        locations: input?.file_path ? [{ path: input.file_path }] : [],
+        locations: filePath ? [{ path: filePath }] : [],
       };
     }
 
-    case "Write":
+    case "Write": {
+      const filePath = input?.file_path ?? input?.path;
       return {
-        title: input?.file_path ? `Write ${input.file_path}` : "Write",
+        title: filePath ? `Write ${filePath}` : "Write",
         kind: "edit",
         content:
-          input && input.file_path
+          input && filePath
             ? [
                 {
                   type: "diff",
-                  path: input.file_path,
+                  path: filePath,
                   oldText: null,
                   newText: input.content,
                 },
               ]
             : [],
-        locations: input?.file_path ? [{ path: input.file_path }] : [],
+        locations: filePath ? [{ path: filePath }] : [],
+      };
+    }
+
+    case acpToolNames.rewindFiles:
+    case "RewindFiles":
+      return {
+        title:
+          input?.user_message_id && input?.dry_run
+            ? `Preview rewind to ${input.user_message_id}`
+            : input?.user_message_id
+              ? `Rewind files to ${input.user_message_id}`
+              : "Rewind files",
+        kind: "edit",
+        content: [],
       };
 
-    case "Glob": {
+    case "Glob":
+    case acpToolNames.glob: {
       let label = "Find";
       if (input.path) {
         label += ` \`${input.path}\``;
@@ -306,7 +396,8 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
     }
 
-    case "Grep": {
+    case "Grep":
+    case acpToolNames.grep: {
       let label = "grep";
 
       if (input["-i"]) {
@@ -372,6 +463,7 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
     }
 
     case "WebFetch":
+    case acpToolNames.webFetch:
       return {
         title: input?.url ? `Fetch ${input.url}` : "Fetch",
         kind: "fetch",
@@ -386,7 +478,8 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
             : [],
       };
 
-    case "WebSearch": {
+    case "WebSearch":
+    case acpToolNames.webSearch: {
       let label = `"${input.query}"`;
 
       if (input.allowed_domains && input.allowed_domains.length > 0) {
@@ -405,6 +498,7 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
     }
 
     case "TodoWrite":
+    case acpToolNames.todoWrite:
       return {
         title: Array.isArray(input?.todos)
           ? `Update TODOs: ${input.todos.map((todo: any) => todo.content).join(", ")}`
@@ -421,6 +515,40 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
           input && input.plan
             ? [{ type: "content", content: { type: "text", text: input.plan } }]
             : [],
+      };
+
+    case "AskUserQuestion":
+      return {
+        title:
+          Array.isArray(input?.questions) && input.questions.length > 0
+            ? `Ask user: ${input.questions.map((q: any) => q.header || q.question).join(", ")}`
+            : "Ask user question",
+        kind: "think",
+        content: [],
+      };
+
+    case "Config":
+    case acpToolNames.config:
+      return {
+        title: "Update configuration",
+        kind: "switch_mode",
+        content: [],
+      };
+
+    case "SlashCommand":
+    case acpToolNames.slashCommand:
+      return {
+        title: input?.command ? `Run ${input.command}` : "Run Slash Command",
+        kind: "execute",
+        content: [],
+      };
+
+    case "Skill":
+    case acpToolNames.skill:
+      return {
+        title: input?.name ? `Run skill ${input.name}` : "Run Skill",
+        kind: "execute",
+        content: [],
       };
 
     case "Other": {
@@ -520,7 +648,6 @@ export function toolUpdateFromToolResult(
         typeof toolResult.content[0].text === "string"
       ) {
         const patches = diff.parsePatch(toolResult.content[0].text);
-        console.error(JSON.stringify(patches));
         for (const { oldFileName, newFileName, hunks } of patches) {
           for (const { lines, newStart } of hunks) {
             const oldText = [];
@@ -571,18 +698,37 @@ export function toolUpdateFromToolResult(
     }
 
     case "Task":
+    case acpToolNames.task:
     case "NotebookEdit":
+    case acpToolNames.notebookEdit:
     case "NotebookRead":
+    case acpToolNames.notebookRead:
     case "TodoWrite":
+    case acpToolNames.todoWrite:
     case "exit_plan_mode":
     case "Bash":
     case "BashOutput":
+    case acpToolNames.bashOutput:
+    case acpToolNames.taskOutput:
     case "KillBash":
+    case acpToolNames.killShell:
+    case acpToolNames.taskStop:
     case "LS":
+    case acpToolNames.ls:
     case "Glob":
+    case acpToolNames.glob:
     case "Grep":
+    case acpToolNames.grep:
     case "WebFetch":
+    case acpToolNames.webFetch:
     case "WebSearch":
+    case acpToolNames.webSearch:
+    case acpToolNames.config:
+    case acpToolNames.listMcpResources:
+    case acpToolNames.readMcpResource:
+    case acpToolNames.agent:
+    case acpToolNames.slashCommand:
+    case acpToolNames.skill:
     case "Other":
     default: {
       return toAcpContentUpdate(
@@ -750,15 +896,45 @@ export const registerHookCallback = (
   };
 };
 
-/* A callback for Claude Code that is called when receiving a PostToolUse hook */
+/* A callback for Claude Code that is called when receiving PostToolUse/TaskCompleted hooks */
 export const createPostToolUseHook =
   (
     logger: Logger = console,
     options?: {
       onEnterPlanMode?: () => Promise<void>;
+      onTaskCompleted?: (task: {
+        task_id: string;
+        task_subject: string;
+        task_description?: string;
+        teammate_name?: string;
+        team_name?: string;
+      }) => Promise<void>;
     },
   ): HookCallback =>
-  async (input: any, toolUseID: string | undefined): Promise<{ continue: boolean }> => {
+  async (
+    input: any,
+    toolUseID: string | undefined,
+    _options: { signal: AbortSignal },
+  ): Promise<{ continue: boolean }> => {
+    if (input.hook_event_name === "TaskCompleted" && options?.onTaskCompleted) {
+      if (
+        typeof input.task_id === "string" &&
+        input.task_id.length > 0 &&
+        typeof input.task_subject === "string" &&
+        input.task_subject.length > 0
+      ) {
+        await options.onTaskCompleted({
+          task_id: input.task_id,
+          task_subject: input.task_subject,
+          task_description:
+            typeof input.task_description === "string" ? input.task_description : undefined,
+          teammate_name: typeof input.teammate_name === "string" ? input.teammate_name : undefined,
+          team_name: typeof input.team_name === "string" ? input.team_name : undefined,
+        });
+      }
+      return { continue: true };
+    }
+
     if (input.hook_event_name === "PostToolUse") {
       // Handle EnterPlanMode tool - notify client of mode change after successful execution
       if (input.tool_name === "EnterPlanMode" && options?.onEnterPlanMode) {
