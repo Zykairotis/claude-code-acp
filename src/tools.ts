@@ -61,6 +61,7 @@ const acpUnqualifiedToolNames = {
   notebookEdit: "NotebookEdit",
   webSearch: "WebSearch",
   webFetch: "WebFetch",
+  askUserQuestion: "AskUserQuestion",
   todoWrite: "TodoWrite",
   config: "Config",
   slashCommand: "SlashCommand",
@@ -89,6 +90,7 @@ export const acpToolNames = {
   notebookEdit: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.notebookEdit,
   webSearch: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.webSearch,
   webFetch: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.webFetch,
+  askUserQuestion: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.askUserQuestion,
   todoWrite: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.todoWrite,
   config: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.config,
   slashCommand: ACP_TOOL_NAME_PREFIX + acpUnqualifiedToolNames.slashCommand,
@@ -518,6 +520,7 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
 
     case "AskUserQuestion":
+    case acpToolNames.askUserQuestion:
       return {
         title:
           Array.isArray(input?.questions) && input.questions.length > 0
@@ -729,6 +732,8 @@ export function toolUpdateFromToolResult(
     case acpToolNames.agent:
     case acpToolNames.slashCommand:
     case acpToolNames.skill:
+    case acpToolNames.askUserQuestion:
+    case "AskUserQuestion":
     case "Other":
     default: {
       return toAcpContentUpdate(
