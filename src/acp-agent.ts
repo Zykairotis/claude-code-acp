@@ -3268,11 +3268,6 @@ export class ClaudeAcpAgent implements Agent {
               },
             });
             
-            // Add note about context limitation
-            const contextNote = "\n\n⚠️ **Note:** Context clearing is not fully implemented in this version. " +
-              "The conversation history may still be available to the model. " +
-              "For a truly fresh context, you may need to create a new session.";
-            
             return {
               behavior: "allow",
               updatedInput: compatibleToolInput,
