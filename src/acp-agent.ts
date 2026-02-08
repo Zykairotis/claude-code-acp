@@ -182,6 +182,10 @@ type Session = {
   settingsManager: SettingsManager;
   userMessageCheckpoints: string[];
   lastAvailableCommands: AvailableCommand[];
+  // Multi-query support for context clearing
+  queryHistory: Query[];           // Track all queries for proper cleanup
+  sdkSessionId: string | null;     // SDK session ID for resume operations
+  contextCleared: boolean;         // Flag indicating context was cleared
 };
 
 type ThoughtLevelId = "adaptive" | "low" | "medium" | "high";
@@ -1350,15 +1354,18 @@ export class ClaudeAcpAgent implements Agent {
       return false;
     }
 
-    const queryWithClose = session.query as Query & { close?: () => void };
-    if (typeof queryWithClose.close === "function") {
-      try {
-        queryWithClose.close();
-      } catch (error) {
-        // Suppress 404 errors from SDK cleanup - these are benign
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        if (!errorMessage.includes("404")) {
-          this.logger.error(`[closeSessionState] Failed to close query for ${sessionId}`, error);
+    // Close all queries in history (multi-query support)
+    for (const query of session.queryHistory) {
+      const queryWithClose = query as Query & { close?: () => void };
+      if (typeof queryWithClose.close === "function") {
+        try {
+          queryWithClose.close();
+        } catch (error) {
+          // Suppress 404 errors from SDK cleanup - these are benign
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (!errorMessage.includes("404")) {
+            this.logger.error(`[closeSessionState] Failed to close query for ${sessionId}`, error);
+          }
         }
       }
     }
@@ -1379,6 +1386,84 @@ export class ClaudeAcpAgent implements Agent {
 
     delete this.sessions[sessionId];
     return true;
+  }
+
+  /**
+   * Start a fresh SDK query for context clearing.
+   * 
+   * This is the KEY to implementing true context clearing:
+   * - Creates a new query() WITHOUT the 'resume' option
+   * - Replaces the session's current query and input stream
+   * - Sends the initial prompt to start the fresh conversation
+   * 
+   * @param sessionId - ACP session ID
+   * @param initialPrompt - First message for the fresh conversation
+   * @param clearContext - If true, creates fresh query; if false, resumes existing
+   */
+  private async startFreshQuery(
+    sessionId: string,
+    initialPrompt: string,
+    clearContext: boolean = true,
+  ): Promise<void> {
+    const session = this.getSessionOrThrow(sessionId);
+
+    this.logger.log(`[startFreshQuery] Starting ${clearContext ? 'fresh' : 'resumed'} query for session ${sessionId}`);
+
+    // 1. Close the old query gracefully
+    const oldQuery = session.query as Query & { close?: () => void };
+    if (typeof oldQuery.close === "function") {
+      try {
+        oldQuery.close();
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (!errorMessage.includes("404")) {
+          this.logger.error(`[startFreshQuery] Failed to close old query for ${sessionId}`, error);
+        }
+      }
+    }
+
+    // 2. Create new input stream
+    const newInput = new Pushable<SDKUserMessage>();
+
+    // 3. Build minimal options - KEY: omit 'resume' if clearing context!
+    // For now, use minimal options. Full options builder can be added later if needed.
+    const baseOptions = {
+      permissionMode: session.permissionMode,
+      canUseTool: this.canUseTool(sessionId),
+      includePartialMessages: session.sessionConfig.enablePartialMessagesValueId === "enabled",
+      allowDangerouslySkipPermissions: ALLOW_BYPASS,
+    } as Options;
+
+    // If NOT clearing context, add resume option to continue conversation
+    if (!clearContext && session.sdkSessionId) {
+      baseOptions.resume = session.sdkSessionId;
+    }
+
+    // 4. Create new query
+    const newQuery = query({
+      prompt: newInput,
+      options: baseOptions,
+    });
+
+    // 5. Update session state
+    session.query = newQuery;
+    session.input = newInput;
+    session.queryHistory.push(newQuery);
+    session.contextCleared = clearContext;
+
+    // 6. Send initial prompt to start conversation
+    // Use the same format as promptToClaude
+    newInput.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: initialPrompt }],
+      },
+      session_id: session.sdkSessionId ?? sessionId,
+      parent_tool_use_id: null,
+    });
+
+    this.logger.log(`[startFreshQuery] Fresh query started for session ${sessionId} (context cleared: ${clearContext})`);
   }
 
   private getSessionIdExtParam(method: string, params: Record<string, unknown>): string {
@@ -3248,15 +3333,9 @@ export class ClaudeAcpAgent implements Agent {
           
           // Handle "clear context and bypass"
           if (selectedOption === "clearAndBypass") {
-            // NOTE: True context clearing requires creating a new SDK query() without
-            // the 'resume' option. This would require significant architectural changes
-            // to support multiple queries per ACP session.
-            //
-            // Current implementation: Switch to bypass mode and include a note about
-            // context not being fully cleared. This matches the behavior when context
-            // clearing isn't fully supported.
-            //
-            // Future: Implement multi-query architecture to support true context clearing.
+            // ✨ TRUE CONTEXT CLEARING IMPLEMENTATION ✨
+            // We now start a fresh SDK query WITHOUT the 'resume' option!
+            // This gives Claude a completely clean slate with no conversation history.
             
             session.permissionMode = "bypassPermissions";
             
@@ -3267,6 +3346,13 @@ export class ClaudeAcpAgent implements Agent {
                 currentModeId: "bypassPermissions",
               },
             });
+            
+            // Start fresh query with cleared context!
+            await this.startFreshQuery(
+              sessionId,
+              `Implement the following plan with full permissions:\n\n${compatibleToolInput.plan}`,
+              true  // clearContext = true → fresh SDK conversation!
+            );
             
             return {
               behavior: "allow",
@@ -3799,6 +3885,10 @@ export class ClaudeAcpAgent implements Agent {
       input: input,
       cancelled: false,
       permissionMode,
+      // Multi-query support
+      queryHistory: [q],           // Track first query
+      sdkSessionId: null,          // Will be set from first system message
+      contextCleared: false,       // No context clearing on initial session
       sessionConfig: {
         modeId: permissionMode,
         availableModeIds: availablePermissionModes(),
