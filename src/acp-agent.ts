@@ -2468,10 +2468,36 @@ export class ClaudeAcpAgent implements Agent {
       return localSlashResponse;
     }
 
-    const { query, input } = session;
-
-    // Keep the primary turn path push-based so output streams immediately in ACP clients.
-    input.push(promptToClaude(params));
+    // Check if we need to clear context before this prompt
+    let query: Query;
+    let input: Pushable<SDKUserMessage>;
+    
+    if (session.contextCleared) {
+      this.logger.log(`[prompt] Context clearing requested for session ${params.sessionId}`);
+      
+      // Start a fresh query with the current prompt
+      await this.startFreshQuery(
+        params.sessionId,
+        typeof params.prompt === "string" ? params.prompt : JSON.stringify(params.prompt),
+        true  // clearContext = true
+      );
+      
+      // Reset the flag
+      session.contextCleared = false;
+      
+      // Use the NEW query and input from the session (startFreshQuery updated them)
+      query = this.sessions[params.sessionId].query;
+      input = this.sessions[params.sessionId].input;
+      
+      // The prompt was already sent by startFreshQuery, so DON'T push again
+    } else {
+      // Normal flow - use existing query
+      query = session.query;
+      input = session.input;
+      
+      // Keep the primary turn path push-based so output streams immediately in ACP clients.
+      input.push(promptToClaude(params));
+    }
     while (true) {
       const { value: message, done } = await query.next();
       if (done || !message) {
@@ -3333,11 +3359,16 @@ export class ClaudeAcpAgent implements Agent {
           
           // Handle "clear context and bypass"
           if (selectedOption === "clearAndBypass") {
-            // ✨ TRUE CONTEXT CLEARING IMPLEMENTATION ✨
-            // We now start a fresh SDK query WITHOUT the 'resume' option!
-            // This gives Claude a completely clean slate with no conversation history.
+            // ✨ CONTEXT CLEARING STRATEGY ✨
+            // We can't call startFreshQuery() here because we're inside the prompt() loop
+            // that's iterating over the current query. Instead, we mark the session
+            // for context clearing, allow the current tool to execute, and clear context
+            // after this prompt completes.
             
             session.permissionMode = "bypassPermissions";
+            
+            // Mark session for context clearing after this prompt
+            session.contextCleared = true;
             
             await this.client.sessionUpdate({
               sessionId,
@@ -3347,13 +3378,8 @@ export class ClaudeAcpAgent implements Agent {
               },
             });
             
-            // Start fresh query with cleared context!
-            await this.startFreshQuery(
-              sessionId,
-              `Implement the following plan with full permissions:\n\n${compatibleToolInput.plan}`,
-              true  // clearContext = true → fresh SDK conversation!
-            );
-            
+            // Let the tool execute normally
+            // Context will be cleared when user sends their next message
             return {
               behavior: "allow",
               updatedInput: compatibleToolInput,
