@@ -3244,11 +3244,18 @@ export class ClaudeAcpAgent implements Agent {
           
           // Handle "clear context and bypass"
           if (selectedOption === "clearAndBypass") {
-            // Clear context by compacting conversation to minimal state
-            // This effectively clears the conversation history while keeping session metadata
+            // NOTE: True context clearing requires creating a new SDK query() without
+            // the 'resume' option. This would require significant architectural changes
+            // to support multiple queries per ACP session.
+            //
+            // Current implementation: Switch to bypass mode and include a note about
+            // context not being fully cleared. This matches the behavior when context
+            // clearing isn't fully supported.
+            //
+            // Future: Implement multi-query architecture to support true context clearing.
+            
             session.permissionMode = "bypassPermissions";
             
-            // Send mode update
             await this.client.sessionUpdate({
               sessionId,
               update: {
@@ -3257,12 +3264,14 @@ export class ClaudeAcpAgent implements Agent {
               },
             });
             
+            // Add note about context limitation
+            const contextNote = "\n\n⚠️ **Note:** Context clearing is not fully implemented in this version. " +
+              "The conversation history may still be available to the model. " +
+              "For a truly fresh context, you may need to create a new session.";
+            
             return {
               behavior: "allow",
-              updatedInput: {
-                ...compatibleToolInput,
-                clearContext: true, // Signal to SDK to clear context
-              },
+              updatedInput: compatibleToolInput,
               updatedPermissions: suggestions ?? [
                 { type: "setMode", mode: "bypassPermissions", destination: "session" },
               ],
