@@ -1355,7 +1355,11 @@ export class ClaudeAcpAgent implements Agent {
       try {
         queryWithClose.close();
       } catch (error) {
-        this.logger.error(`[closeSessionState] Failed to close query for ${sessionId}`, error);
+        // Suppress 404 errors from SDK cleanup - these are benign
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (!errorMessage.includes("404")) {
+          this.logger.error(`[closeSessionState] Failed to close query for ${sessionId}`, error);
+        }
       }
     }
 
