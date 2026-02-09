@@ -183,9 +183,10 @@ type Session = {
   userMessageCheckpoints: string[];
   lastAvailableCommands: AvailableCommand[];
   // Multi-query support for context clearing
-  queryHistory: Query[];           // Track all queries for proper cleanup
-  sdkSessionId: string | null;     // SDK session ID for resume operations
-  contextCleared: boolean;         // Flag indicating context was cleared
+  queryHistory: Query[]; // Track all queries for proper cleanup
+  sdkSessionId: string | null; // SDK session ID for resume operations
+  contextCleared: boolean; // Flag indicating context was cleared
+  originalOptions: Options; // Store original options for context clearing
 };
 
 type ThoughtLevelId = "adaptive" | "low" | "medium" | "high";
@@ -1390,12 +1391,12 @@ export class ClaudeAcpAgent implements Agent {
 
   /**
    * Start a fresh SDK query for context clearing.
-   * 
+   *
    * This is the KEY to implementing true context clearing:
    * - Creates a new query() WITHOUT the 'resume' option
    * - Replaces the session's current query and input stream
    * - Sends the initial prompt to start the fresh conversation
-   * 
+   *
    * @param sessionId - ACP session ID
    * @param initialPrompt - First message for the fresh conversation
    * @param clearContext - If true, creates fresh query; if false, resumes existing
@@ -1407,7 +1408,9 @@ export class ClaudeAcpAgent implements Agent {
   ): Promise<void> {
     const session = this.getSessionOrThrow(sessionId);
 
-    this.logger.log(`[startFreshQuery] Starting ${clearContext ? 'fresh' : 'resumed'} query for session ${sessionId}`);
+    this.logger.log(
+      `[startFreshQuery] Starting ${clearContext ? "fresh" : "resumed"} query for session ${sessionId}`,
+    );
 
     // 1. Close the old query gracefully
     const oldQuery = session.query as Query & { close?: () => void };
@@ -1463,7 +1466,89 @@ export class ClaudeAcpAgent implements Agent {
       parent_tool_use_id: null,
     });
 
-    this.logger.log(`[startFreshQuery] Fresh query started for session ${sessionId} (context cleared: ${clearContext})`);
+    this.logger.log(
+      `[startFreshQuery] Fresh query started for session ${sessionId} (context cleared: ${clearContext})`,
+    );
+  }
+
+  /**
+   * Captures the init message from a query and updates session state.
+   * This is critical for context clearing to properly capture the new sdkSessionId.
+   * @param sessionId - ACP session ID
+   * @param targetQuery - The query to iterate for init message
+   * @returns The slash commands from the init message, or null if init message was not captured
+   */
+  private async captureInitMessage(
+    sessionId: string,
+    targetQuery: Query,
+  ): Promise<SlashCommand[] | null> {
+    const session = this.getSessionOrThrow(sessionId);
+
+    try {
+      let attempts = 0;
+      const maxAttempts = 10;
+
+      while (attempts < maxAttempts) {
+        const { value: message, done } = await targetQuery.next();
+        attempts++;
+
+        if (done) {
+          this.logger.error(
+            `[captureInitMessage] Query ended without init message for ${sessionId}`,
+          );
+          return null;
+        }
+
+        if (!message) continue;
+
+        if (message.type === "system" && message.subtype === "init") {
+          // Capture the new SDK session ID
+          if (message.session_id) {
+            session.sdkSessionId = message.session_id;
+            this.logger.log(`[captureInitMessage] Captured sdkSessionId: ${message.session_id}`);
+          }
+
+          // Update mode/model state from init message
+          if (message.permissionMode) {
+            this.updateSessionModeState(session, message.permissionMode);
+          }
+          if (message.model) {
+            this.updateSessionModelState(session, message.model);
+          }
+
+          // Send usage update to reset context metrics to near-zero
+          await this.client.sessionUpdate({
+            sessionId,
+            update: {
+              sessionUpdate: "usage_update",
+              used: 0,
+              size: 200000, // Default context window
+              cost: undefined,
+            },
+          });
+
+          this.logger.log(`[captureInitMessage] Init captured and metrics reset for ${sessionId}`);
+
+          // Extract and return slash commands from init message
+          const slashCommands = (message as any).slash_commands;
+          if (slashCommands && Array.isArray(slashCommands)) {
+            return slashCommands as SlashCommand[];
+          }
+          return [];
+        }
+      }
+
+      this.logger.error(
+        `[captureInitMessage] Max attempts reached without init message for ${sessionId}`,
+      );
+      return null;
+    } catch (error) {
+      this.logger.error(
+        `[captureInitMessage] Error capturing init message for ${sessionId}:`,
+        error,
+      );
+      return null;
+    }
   }
 
   private getSessionIdExtParam(method: string, params: Record<string, unknown>): string {
@@ -2460,6 +2545,80 @@ export class ClaudeAcpAgent implements Agent {
     session.cancelled = false;
     await this.refreshAvailableCommands(params.sessionId);
 
+    // Check if we need to clear context FIRST, before any other processing
+    if (session.contextCleared) {
+      this.logger.log(`[prompt] Context clearing requested for session ${params.sessionId}`);
+
+      // Clear context by starting a fresh query WITHOUT sending the prompt yet
+      // We'll handle slash commands after clearing
+
+      // Close the old query gracefully
+      const oldQuery = session.query as Query & { close?: () => void };
+      if (typeof oldQuery.close === "function") {
+        try {
+          oldQuery.close();
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (!errorMessage.includes("404")) {
+            this.logger.error(`[prompt] Failed to close old query for ${params.sessionId}`, error);
+          }
+        }
+      }
+
+      // Create new input stream
+      const newInput = new Pushable<SDKUserMessage>();
+
+      // Use originalOptions if available, otherwise fallback to minimal options
+      // This preserves systemPrompt (CLAUDE.md), settingSources (.claude/*), mcpServers, hooks, etc.
+      const newOptions: Options = session.originalOptions
+        ? {
+            ...session.originalOptions,
+            // Override dynamic values
+            permissionMode: session.permissionMode,
+            canUseTool: this.canUseTool(params.sessionId),
+            allowDangerouslySkipPermissions: ALLOW_BYPASS,
+            // Set session ID for the fresh query
+            sessionId: params.sessionId,
+          }
+        : {
+            // Minimal fallback for backward compatibility
+            permissionMode: session.permissionMode,
+            canUseTool: this.canUseTool(params.sessionId),
+            includePartialMessages:
+              session.sessionConfig.enablePartialMessagesValueId === "enabled",
+            allowDangerouslySkipPermissions: ALLOW_BYPASS,
+          };
+
+      // Don't add resume option - we're clearing context
+      delete (newOptions as any).resume;
+
+      const newQuery = query({
+        prompt: newInput,
+        options: newOptions,
+      });
+
+      // Update session state
+      session.query = newQuery;
+      session.input = newInput;
+      session.queryHistory.push(newQuery);
+      session.sdkSessionId = null; // Reset - will be captured from init
+      session.contextCleared = false;
+
+      // CRITICAL: Capture init message to get new sdkSessionId and reset metrics
+      const initCaptured = await this.captureInitMessage(params.sessionId, newQuery);
+      if (!initCaptured) {
+        this.logger.error(
+          `[prompt] Failed to capture init message during context clear for ${params.sessionId}`,
+        );
+      }
+
+      this.logger.log(`[prompt] Context cleared for session ${params.sessionId}`);
+
+      // Refresh available commands from the new query to sync auth state
+      await this.refreshAvailableCommands(params.sessionId);
+    }
+
+    // Try handling slash commands (after context is cleared if needed)
     const localSlashResponse = await this.tryHandleLocalSlashCommand(
       params.sessionId,
       params.prompt,
@@ -2468,38 +2627,14 @@ export class ClaudeAcpAgent implements Agent {
       return localSlashResponse;
     }
 
-    // Check if we need to clear context before this prompt
-    let query: Query;
-    let input: Pushable<SDKUserMessage>;
-    
-    if (session.contextCleared) {
-      this.logger.log(`[prompt] Context clearing requested for session ${params.sessionId}`);
-      
-      // Start a fresh query with the current prompt
-      await this.startFreshQuery(
-        params.sessionId,
-        typeof params.prompt === "string" ? params.prompt : JSON.stringify(params.prompt),
-        true  // clearContext = true
-      );
-      
-      // Reset the flag
-      session.contextCleared = false;
-      
-      // Use the NEW query and input from the session (startFreshQuery updated them)
-      query = this.sessions[params.sessionId].query;
-      input = this.sessions[params.sessionId].input;
-      
-      // The prompt was already sent by startFreshQuery, so DON'T push again
-    } else {
-      // Normal flow - use existing query
-      query = session.query;
-      input = session.input;
-      
-      // Keep the primary turn path push-based so output streams immediately in ACP clients.
-      input.push(promptToClaude(params));
-    }
+    // Normal flow - use current query
+    const currentQuery = session.query;
+    const input = session.input;
+
+    // Keep the primary turn path push-based so output streams immediately in ACP clients.
+    input.push(promptToClaude(params));
     while (true) {
-      const { value: message, done } = await query.next();
+      const { value: message, done } = await currentQuery.next();
       if (done || !message) {
         if (this.sessions[params.sessionId].cancelled) {
           return { stopReason: "cancelled" };
@@ -3324,14 +3459,14 @@ export class ClaudeAcpAgent implements Agent {
             optionId: "bypassPermissions",
           });
         }
-        
+
         // Standard options
         exitPlanOptions.push({
           kind: "allow_once",
           name: "Yes, manually approve edits",
           optionId: "default",
         });
-        
+
         // Keep planning option last
         exitPlanOptions.push({
           kind: "reject_once",
@@ -3352,11 +3487,11 @@ export class ClaudeAcpAgent implements Agent {
         if (signal.aborted || response.outcome?.outcome === "cancelled") {
           throw new Error("Tool use aborted");
         }
-        
+
         // Handle the selected option
         if (response.outcome?.outcome === "selected") {
           const selectedOption = response.outcome.optionId;
-          
+
           // Handle "clear context and bypass"
           if (selectedOption === "clearAndBypass") {
             // ✨ CONTEXT CLEARING STRATEGY ✨
@@ -3364,12 +3499,12 @@ export class ClaudeAcpAgent implements Agent {
             // that's iterating over the current query. Instead, we mark the session
             // for context clearing, allow the current tool to execute, and clear context
             // after this prompt completes.
-            
+
             session.permissionMode = "bypassPermissions";
-            
+
             // Mark session for context clearing after this prompt
             session.contextCleared = true;
-            
+
             await this.client.sessionUpdate({
               sessionId,
               update: {
@@ -3377,7 +3512,7 @@ export class ClaudeAcpAgent implements Agent {
                 currentModeId: "bypassPermissions",
               },
             });
-            
+
             // Let the tool execute normally
             // Context will be cleared when user sends their next message
             return {
@@ -3388,15 +3523,12 @@ export class ClaudeAcpAgent implements Agent {
               ],
             };
           }
-          
+
           // Handle other mode switches (bypass, default, acceptEdits)
-          if (
-            isPermissionMode(selectedOption) &&
-            selectedOption !== "plan"
-          ) {
+          if (isPermissionMode(selectedOption) && selectedOption !== "plan") {
             // User approved exit and selected a mode
             session.permissionMode = selectedOption as PermissionMode;
-            
+
             await this.client.sessionUpdate({
               sessionId,
               update: {
@@ -3550,9 +3682,10 @@ export class ClaudeAcpAgent implements Agent {
     }
 
     let systemPrompt: Options["systemPrompt"] = { type: "preset", preset: "claude_code" };
-    
+
     // Priority: sessionConfig > _meta.systemPrompt > default
-    const sessionConfigMeta = (params._meta as NewSessionMeta | undefined)?.claudeCode?.sessionConfig;
+    const sessionConfigMeta = (params._meta as NewSessionMeta | undefined)?.claudeCode
+      ?.sessionConfig;
     if (sessionConfigMeta?.systemPrompt) {
       systemPrompt = sessionConfigMeta.systemPrompt;
     } else if (params._meta?.systemPrompt) {
@@ -3573,9 +3706,8 @@ export class ClaudeAcpAgent implements Agent {
     const userProvidedOptions = (params._meta as NewSessionMeta | undefined)?.claudeCode?.options;
     const startupSessionConfig = (params._meta as NewSessionMeta | undefined)?.claudeCode
       ?.sessionConfig;
-    const requestedSettingSources = 
-      startupSessionConfig?.settingSources ?? 
-      userProvidedOptions?.settingSources;
+    const requestedSettingSources =
+      startupSessionConfig?.settingSources ?? userProvidedOptions?.settingSources;
     const effectiveSettingSources =
       Array.isArray(requestedSettingSources) && requestedSettingSources.length > 0
         ? requestedSettingSources
@@ -3912,9 +4044,9 @@ export class ClaudeAcpAgent implements Agent {
       cancelled: false,
       permissionMode,
       // Multi-query support
-      queryHistory: [q],           // Track first query
-      sdkSessionId: null,          // Will be set from first system message
-      contextCleared: false,       // No context clearing on initial session
+      queryHistory: [q], // Track first query
+      sdkSessionId: null, // Will be set from first system message
+      contextCleared: false, // No context clearing on initial session
       sessionConfig: {
         modeId: permissionMode,
         availableModeIds: availablePermissionModes(),
@@ -3957,6 +4089,7 @@ export class ClaudeAcpAgent implements Agent {
       settingsManager,
       userMessageCheckpoints: checkpointHistory,
       lastAvailableCommands: [],
+      originalOptions: options, // Store for context clearing
     };
 
     const initializationResult = await q.initializationResult();
